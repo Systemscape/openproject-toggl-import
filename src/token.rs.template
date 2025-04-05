@@ -1,0 +1,8 @@
+// Enter token and rename to "token.rs"
+pub const AUTH_TOKEN_TOGGL: &str = "abcde";
+
+// OpenProject Configuration
+pub const OPENPROJECT_HOST: &str= "op.example.com";
+pub const OPENPROJECT_API_KEY: &str= "abcde";
+pub const OPENPROJECT_HTTP_SCHEMA: &str= "https";
+pub const OPENPROJECT_DEFAULT_ACTIVITY_ID: &str= "1";
