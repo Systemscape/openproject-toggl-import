@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method};
@@ -6,20 +6,28 @@ use serde::Deserialize;
 
 use crate::token::AUTH_TOKEN_TOGGL;
 
+/// **Note** it seems like it is not straightforward to determine whether an entry has been deleted
+/// so there might appear entries that are not shown on toggl anymore
 #[derive(Deserialize, Debug)]
 pub struct TimeEntry {
-    pub at: String,
+    /// Toggl entry ID
+    pub id: u64,
     pub description: Option<String>, // API docs say entry with no description is null/None, but in practice it's an empty string, e.g. ""
     /// Duration in seconds
     pub duration: i64,
-    pub id: u64,
     pub start: DateTime<FixedOffset>,
     pub stop: Option<DateTime<FixedOffset>>,
 }
 
-pub async fn get_time_entries(
-    days: i64,
-) -> Result<Vec<TimeEntry>, reqwest::Error> {
+/// [`TimeEntry`] with extracted WP ID and description
+#[derive(Debug)]
+pub struct ExtendedTimeEntry {
+    pub toggl_time_entry: TimeEntry,
+    pub work_package_id: String,
+    pub description: String,
+}
+
+pub async fn get_time_entries(days: i64) -> Result<Vec<TimeEntry>, reqwest::Error> {
     let authorization_value = format!(
         "Basic {}",
         general_purpose::STANDARD.encode(format!("{}:api_token", AUTH_TOKEN_TOGGL))

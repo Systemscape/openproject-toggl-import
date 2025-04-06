@@ -1,13 +1,13 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use dialoguer::{Confirm, theme::ColorfulTheme};
+use openproject::TimeEntryRequest;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     env,
     process::exit,
 };
+use toggl::ExtendedTimeEntry;
 use token::*;
 use tracing::{debug, info};
 
@@ -20,49 +20,6 @@ mod token;
 const REGEX_STRING: &str = r"(?i)^\[OP#(\d+)\](?: +(.*))*";
 
 const COMMENT_SEPARATOR: &str = " - ";
-
-#[derive(Debug)]
-struct ExtendedTimeEntry {
-    toggl_time_entry: toggl::TimeEntry,
-    work_package_id: String,
-    description: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct TimeEntryRequest {
-    #[serde(rename = "_links")]
-    links: Links,
-    hours: String,
-    #[serde(rename = "startTime")]
-    start_time: DateTime<Utc>,
-    #[serde(rename = "stopTime")]
-    stop_time: DateTime<Utc>,
-    comment: Comment,
-    #[serde(rename = "spentOn")]
-    spent_on: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Links {
-    #[serde(rename = "workPackage")]
-    work_package: Link,
-    activity: Link,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Link {
-    href: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Comment {
-    raw: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct User {
-    pub id: String,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -146,36 +103,14 @@ async fn main() -> Result<()> {
             // Skip entries that already exist based on Toggl ID
             let toggl_id = entry.toggl_time_entry.id.to_string();
             if existing_toggl_ids.contains(&toggl_id) {
-                info!(
+                debug!(
                     "Skipping already submitted entry with Toggl ID: {}",
                     toggl_id
                 );
                 continue;
             }
 
-            let comment = toggl_id + COMMENT_SEPARATOR + &entry.description;
-
-            let links = Links {
-                work_package: Link {
-                    href: format!("/api/v3/work_packages/{}", entry.work_package_id),
-                },
-                activity: Link {
-                    href: format!("/api/v3/time_entries/activities/{}", op_activity_id),
-                },
-            };
-
-            // Convert seconds to hours, maintaining precision
-            let duration = format!("PT{}S", entry.toggl_time_entry.duration);
-            let date = entry.toggl_time_entry.start.format("%Y-%m-%d").to_string();
-
-            entries_to_submit.push(TimeEntryRequest {
-                links,
-                hours: duration,
-                start_time: entry.toggl_time_entry.start.to_utc(),
-                stop_time: entry.toggl_time_entry.start.to_utc(),
-                comment: Comment { raw: comment },
-                spent_on: date,
-            });
+            entries_to_submit.push(TimeEntryRequest::from(entry, &op_activity_id));
         }
     }
 
@@ -200,7 +135,7 @@ async fn main() -> Result<()> {
     }
 
     for entry in entries_to_submit {
-        openproject::submit_entry(entry).await?;
+        entry.upload().await?;
     }
 
     info!("All time entries submitted successfully!");

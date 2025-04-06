@@ -1,35 +1,112 @@
 use std::env;
 
-use crate::{COMMENT_SEPARATOR, TimeEntryRequest, token::*};
+use crate::{COMMENT_SEPARATOR, toggl::ExtendedTimeEntry, token::*};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-pub async fn submit_entry(item: TimeEntryRequest) -> Result<()> {
-    // Get environment variables
-    let op_host = env::var("OPENPROJECT_HOST").unwrap_or(OPENPROJECT_HOST.to_string());
-    let op_http_schema =
-        env::var("OPENPROJECT_HTTP_SCHEMA").unwrap_or(OPENPROJECT_HTTP_SCHEMA.to_string());
-
-    // Base URL for OpenProject API
-    let op_base_url = format!("{}://{}/api/v3/", op_http_schema, op_host);
-    info!("OpenProject base URL: {}", op_base_url);
-
-    let client = reqwest::Client::new();
-    // Base URL for OpenProject API
-    let url = format!("{}time_entries", op_base_url);
-
-    let res = client
-        .post(url)
-        .basic_auth("apikey", Some(OPENPROJECT_API_KEY))
-        .json(&item)
-        .send()
-        .await?;
-
-    info!("Response: {}", res.text().await?);
-
-    Ok(())
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TimeEntryRequest {
+    #[serde(rename = "_links")]
+    pub links: Links,
+    pub hours: String,
+    #[serde(rename = "startTime")]
+    pub start_time: DateTime<Utc>,
+    #[serde(rename = "stopTime")]
+    pub stop_time: DateTime<Utc>,
+    pub comment: Comment,
+    #[serde(rename = "spentOn")]
+    pub spent_on: String,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Links {
+    #[serde(rename = "workPackage")]
+    work_package: Link,
+    activity: Link,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Link {
+    href: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Comment {
+    raw: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct User {
+    pub id: String,
+}
+
+impl TimeEntryRequest {
+    pub fn from(entry: &ExtendedTimeEntry, activity_id: &str) -> Self {
+        let links = Links::from(&entry.work_package_id, activity_id);
+        let toggl_id = entry.toggl_time_entry.id.to_string();
+        let duration = format!("PT{}S", entry.toggl_time_entry.duration);
+        let date = entry.toggl_time_entry.start.format("%Y-%m-%d").to_string();
+        let comment = toggl_id + COMMENT_SEPARATOR + &entry.description;
+
+        Self {
+            links,
+            hours: duration,
+            start_time: entry.toggl_time_entry.start.to_utc(),
+            stop_time: entry.toggl_time_entry.start.to_utc(),
+            comment: Comment::from(comment),
+            spent_on: date,
+        }
+    }
+
+    pub async fn upload(&self) -> Result<()> {
+        // Get environment variables
+        let op_host = env::var("OPENPROJECT_HOST").unwrap_or(OPENPROJECT_HOST.to_string());
+        let op_http_schema =
+            env::var("OPENPROJECT_HTTP_SCHEMA").unwrap_or(OPENPROJECT_HTTP_SCHEMA.to_string());
+
+        // Base URL for OpenProject API
+        let op_base_url = format!("{}://{}/api/v3/", op_http_schema, op_host);
+        info!("OpenProject base URL: {}", op_base_url);
+
+        let client = reqwest::Client::new();
+        // Base URL for OpenProject API
+        let url = format!("{}time_entries", op_base_url);
+
+        let res: reqwest::Response = client
+            .post(url)
+            .basic_auth("apikey", Some(OPENPROJECT_API_KEY))
+            .json(self)
+            .send()
+            .await?;
+
+        info!("Response: {}", res.text().await?);
+
+        Ok(())
+    }
+}
+
+impl Links {
+    pub fn from(wp_id: &str, activity_id: &str) -> Self {
+        Self {
+            work_package: Link {
+                href: format!("/api/v3/work_packages/{}", wp_id),
+            },
+            activity: Link {
+                href: format!("/api/v3/time_entries/activities/{}", activity_id),
+            },
+        }
+    }
+}
+
+impl Comment {
+    pub fn from(comment: String) -> Self {
+        Self { raw: comment }
+    }
+}
+
+/// Get a list of already existing toggl IDs for a workpackage
 pub async fn get_existing_toggl_ids(wp_id: &str) -> Result<Vec<String>> {
     debug!("get_workitems for issue_id {}", wp_id);
     let uri = format!(
@@ -48,8 +125,6 @@ pub async fn get_existing_toggl_ids(wp_id: &str) -> Result<Vec<String>> {
             )));
         }
     };
-
-    info!("entries: {:#?}", entries);
 
     // Create a HashSet to store existing Toggl IDs in OpenProject
     let mut existing_toggl_ids = Vec::new();
@@ -97,29 +172,11 @@ pub async fn perform_request(uri: &str) -> Result<reqwest::Response, reqwest::Er
         .await
 }
 
-/*
-pub async fn get_current_user() -> Result<User, String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .get(format!("{BASE_URL}/api/users/me?fields=id,login"))
-        .bearer_auth(AUTH_TOKEN_YOUTRACK)
-        .send()
-        .await;
-
-    let res = res.unwrap().text().await.unwrap();
-    debug!("get_current_user - got res: {:#?}", res);
-
-    let user: User = serde_json::from_str(&res).unwrap();
-    Ok(user)
-}
-    */
-
 #[cfg(test)]
 mod test {
     use test_log::test;
 
-    use crate::{TimeEntryRequest, openproject};
+    use crate::openproject::{self, Comment, Link, Links, TimeEntryRequest};
 
     #[test(tokio::test)]
     async fn test_serde() {
@@ -129,23 +186,23 @@ mod test {
     #[tokio::test]
     async fn test_upload() {
         let entry = TimeEntryRequest {
-            links: crate::Links {
-                work_package: crate::Link {
+            links: Links {
+                work_package: Link {
                     href: format!("/api/v3/work_packages/{}", 50),
                 },
-                activity: crate::Link {
+                activity: Link {
                     href: format!("/api/v3/time_entries/activities/{}", 1),
                 },
             },
             hours: format!("PT{}S", 30 * 60), // 30 mins, should show as 0.5h
             start_time: chrono::Utc::now(),
             stop_time: chrono::Utc::now(),
-            comment: crate::Comment {
+            comment: Comment {
                 raw: "Test - CAN BE DELETED".into(),
             },
             spent_on: chrono::Utc::now().format("%Y-%m-%d").to_string(),
         };
 
-        openproject::submit_entry(entry).await.unwrap();
+        entry.upload().await.unwrap();
     }
 }
