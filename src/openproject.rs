@@ -8,6 +8,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+/// Reusable client that stores endpoint and credentials
 pub struct OpenProjectClient {
     client: Client,
     base_url: String,
@@ -16,20 +17,26 @@ pub struct OpenProjectClient {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TimeEntryRequest {
+    /// Links to workpackage and activity
     #[serde(rename = "_links")]
-    pub links: Links,
-    pub hours: String,
+    links: Links,
+    /// Time as ISO 8601 duration (can also be seconds or minutes!)
+    hours: String,
+    /// Entry start time
     #[serde(rename = "startTime")]
-    pub start_time: DateTime<Utc>,
+    start_time: DateTime<Utc>,
+    /// Entry end time
     #[serde(rename = "stopTime")]
-    pub stop_time: DateTime<Utc>,
-    pub comment: Comment,
+    stop_time: DateTime<Utc>,
+    /// Comment/Description
+    comment: Comment,
+    /// Day at which the time has been spent formatted as YYYY-MM-DD
     #[serde(rename = "spentOn")]
-    pub spent_on: String,
+    spent_on: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Links {
+struct Links {
     #[serde(rename = "workPackage")]
     work_package: Link,
     activity: Link,
@@ -41,7 +48,7 @@ struct Link {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Comment {
+struct Comment {
     raw: String,
 }
 
@@ -104,6 +111,8 @@ impl TimeEntryRequest {
         let toggl_id = entry.toggl_time_entry.id.to_string();
         let duration = format!("PT{}S", entry.toggl_time_entry.duration);
         let date = entry.toggl_time_entry.start.format("%Y-%m-%d").to_string();
+
+        // Comment string containing the toggl ID to check whether it has been uploaded already
         let comment = toggl_id + COMMENT_SEPARATOR + &entry.description;
 
         Self {
@@ -116,6 +125,7 @@ impl TimeEntryRequest {
         }
     }
 
+    /// Upload a time TimeEntry to openproject
     pub async fn upload(&self, op_client: &OpenProjectClient) -> Result<()> {
         let res = op_client.post("time_entries", self).await?;
 
@@ -126,6 +136,7 @@ impl TimeEntryRequest {
 }
 
 impl Links {
+    /// Helper function to create a valid Links struct from a workpackage ID and an activity ID
     pub fn from(wp_id: &str, activity_id: &str) -> Self {
         Self {
             work_package: Link {
@@ -139,6 +150,7 @@ impl Links {
 }
 
 impl Comment {
+    /// Helper function to fill the Comment (wrapper) struct
     pub fn from(comment: String) -> Self {
         Self { raw: comment }
     }
@@ -150,27 +162,27 @@ pub async fn get_existing_toggl_ids(
     wp_id: &str,
 ) -> Result<Vec<String>> {
     debug!("get_workitems for issue_id {}", wp_id);
+
+    // Construct a query that gets time entries filtered for the given workpackage ID
     let uri = format!(
         "time_entries?pageSize=100&filters=[{{\"work_package\":{{\"operator\":\"=\",\"values\":[\"{wp_id}\"]}}}}]"
     );
 
-    let res = op_client.get(&uri).await.unwrap();
+    let res = op_client.get(&uri).await?;
     let res = res.error_for_status()?;
 
-    let entries: serde_json::Value = match res.json().await {
-        Ok(json) => json,
-        Err(e) => {
-            return Err(anyhow::Error::msg(format!(
-                "Error parsing time entries JSON for WP #{}: {}",
-                wp_id, e,
-            )));
-        }
-    };
+    let entries: serde_json::Value = res.json().await.map_err(|e| {
+        anyhow::Error::msg(format!(
+            "Error parsing time entries JSON for WP #{}: {}",
+            wp_id, e,
+        ))
+    })?;
 
     // Create a HashSet to store existing Toggl IDs in OpenProject
     let mut existing_toggl_ids = Vec::new();
 
-    // Extract Toggl IDs from the custom field
+    // Extract Toggl IDs from the custom field which is nested under the
+    // `_embedded` and `element` tags
     if let Some(elements_array) = entries
         .get("_embedded")
         .and_then(|e| e.get("elements"))
@@ -178,6 +190,7 @@ pub async fn get_existing_toggl_ids(
     {
         for element in elements_array {
             if let Some(comment_field) = element.get("comment").and_then(|c| c.get("raw")) {
+                // Extract the toggl ID as the first part before the comment separator
                 existing_toggl_ids.push(
                     comment_field
                         .as_str()

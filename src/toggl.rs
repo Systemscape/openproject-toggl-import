@@ -27,6 +27,9 @@ pub struct ExtendedTimeEntry {
     pub description: String,
 }
 
+/// Pull all time entries from toggl within the last `days`
+/// 
+/// **Note** `days` must be less than 90
 pub async fn get_time_entries(days: i64) -> Result<Vec<TimeEntry>, reqwest::Error> {
     let authorization_value = format!(
         "Basic {}",

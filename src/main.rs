@@ -101,7 +101,8 @@ async fn main() -> Result<()> {
     // Collect all individual time entries to submit
     let mut entries_to_submit = Vec::new();
 
-    for (_wp_id, entries) in wp_time_entries_map.iter() {
+    // Add all entries for all workpackage IDs to the Vec if they have not already been uploaded
+    for (_, entries) in wp_time_entries_map.iter() {
         for entry in entries {
             // Skip entries that already exist based on Toggl ID
             let toggl_id = entry.toggl_time_entry.id.to_string();
@@ -137,6 +138,7 @@ async fn main() -> Result<()> {
         exit(1);
     }
 
+    // Upload the missing entries if the user confirmed
     for entry in entries_to_submit {
         entry.upload(&op_client).await?;
     }
