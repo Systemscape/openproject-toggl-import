@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dialoguer::{Confirm, theme::ColorfulTheme};
-use openproject::TimeEntryRequest;
+use openproject::{OpenProjectClient, TimeEntryRequest};
 use regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
@@ -83,10 +83,13 @@ async fn main() -> Result<()> {
     // Create a HashSet to store existing Toggl IDs in OpenProject
     let mut existing_toggl_ids = Vec::new();
 
+    // Create a reusable openproject client
+    let op_client = OpenProjectClient::new();
+
     // For each work package, fetch existing Toggl IDs for that workpackage
     // Note: Openproject allows fetching ALL time entries, but this quickly becomes a huge lot of data we don't need.
     for wp_id in &unique_wp_ids {
-        let mut ids_from_wp = openproject::get_existing_toggl_ids(wp_id).await?;
+        let mut ids_from_wp = openproject::get_existing_toggl_ids(&op_client, wp_id).await?;
         existing_toggl_ids.append(&mut ids_from_wp);
     }
 
@@ -135,7 +138,7 @@ async fn main() -> Result<()> {
     }
 
     for entry in entries_to_submit {
-        entry.upload().await?;
+        entry.upload(&op_client).await?;
     }
 
     info!("All time entries submitted successfully!");

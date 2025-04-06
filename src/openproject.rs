@@ -1,10 +1,18 @@
 use std::env;
 
 use crate::{COMMENT_SEPARATOR, toggl::ExtendedTimeEntry, token::*};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use reqwest::{Client, Response};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
+
+pub struct OpenProjectClient {
+    client: Client,
+    base_url: String,
+    apikey: SecretString,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TimeEntryRequest {
@@ -42,6 +50,54 @@ struct User {
     pub id: String,
 }
 
+impl OpenProjectClient {
+    pub fn new() -> Self {
+        // Get environment variables
+        let op_host = env::var("OPENPROJECT_HOST").unwrap_or(OPENPROJECT_HOST.to_string());
+        let op_http_schema =
+            env::var("OPENPROJECT_HTTP_SCHEMA").unwrap_or(OPENPROJECT_HTTP_SCHEMA.to_string());
+
+        let op_apikey = env::var("OPENPROJECT_API_KEY").unwrap_or(OPENPROJECT_API_KEY.to_string());
+
+        // Base URL for OpenProject API
+        let base_url = format!("{}://{}/api/v3/", op_http_schema, op_host);
+        info!("OpenProject base URL: {}", base_url);
+
+        let client = reqwest::Client::new();
+        Self {
+            client,
+            base_url,
+            apikey: SecretString::from(op_apikey),
+        }
+    }
+
+    /// Path without leading slash, payload is posted as JSON
+    async fn post(&self, path: &str, payload: impl Serialize) -> Result<Response> {
+        // Base URL for OpenProject API + a path
+        let url = format!("{}{}", self.base_url, path);
+
+        self.client
+            .post(url)
+            .basic_auth("apikey", Some(self.apikey.expose_secret()))
+            .json(&payload)
+            .send()
+            .await
+            .context("POST request failed")
+    }
+
+    async fn get(&self, path: &str) -> Result<Response> {
+        // Base URL for OpenProject API + a path
+        let url = format!("{}{}", self.base_url, path);
+
+        self.client
+            .get(url)
+            .basic_auth("apikey", Some(self.apikey.expose_secret()))
+            .send()
+            .await
+            .context("GET request failed")
+    }
+}
+
 impl TimeEntryRequest {
     pub fn from(entry: &ExtendedTimeEntry, activity_id: &str) -> Self {
         let links = Links::from(&entry.work_package_id, activity_id);
@@ -60,26 +116,8 @@ impl TimeEntryRequest {
         }
     }
 
-    pub async fn upload(&self) -> Result<()> {
-        // Get environment variables
-        let op_host = env::var("OPENPROJECT_HOST").unwrap_or(OPENPROJECT_HOST.to_string());
-        let op_http_schema =
-            env::var("OPENPROJECT_HTTP_SCHEMA").unwrap_or(OPENPROJECT_HTTP_SCHEMA.to_string());
-
-        // Base URL for OpenProject API
-        let op_base_url = format!("{}://{}/api/v3/", op_http_schema, op_host);
-        info!("OpenProject base URL: {}", op_base_url);
-
-        let client = reqwest::Client::new();
-        // Base URL for OpenProject API
-        let url = format!("{}time_entries", op_base_url);
-
-        let res: reqwest::Response = client
-            .post(url)
-            .basic_auth("apikey", Some(OPENPROJECT_API_KEY))
-            .json(self)
-            .send()
-            .await?;
+    pub async fn upload(&self, op_client: &OpenProjectClient) -> Result<()> {
+        let res = op_client.post("time_entries", self).await?;
 
         info!("Response: {}", res.text().await?);
 
@@ -107,13 +145,16 @@ impl Comment {
 }
 
 /// Get a list of already existing toggl IDs for a workpackage
-pub async fn get_existing_toggl_ids(wp_id: &str) -> Result<Vec<String>> {
+pub async fn get_existing_toggl_ids(
+    op_client: &OpenProjectClient,
+    wp_id: &str,
+) -> Result<Vec<String>> {
     debug!("get_workitems for issue_id {}", wp_id);
     let uri = format!(
         "time_entries?pageSize=100&filters=[{{\"work_package\":{{\"operator\":\"=\",\"values\":[\"{wp_id}\"]}}}}]"
     );
 
-    let res = perform_request(&uri).await.unwrap();
+    let res = op_client.get(&uri).await.unwrap();
     let res = res.error_for_status()?;
 
     let entries: serde_json::Value = match res.json().await {
@@ -153,38 +194,24 @@ pub async fn get_existing_toggl_ids(wp_id: &str) -> Result<Vec<String>> {
     Ok(existing_toggl_ids)
 }
 
-pub async fn perform_request(uri: &str) -> Result<reqwest::Response, reqwest::Error> {
-    // Get environment variables
-    let op_host = env::var("OPENPROJECT_HOST").unwrap_or(OPENPROJECT_HOST.to_string());
-    let op_http_schema =
-        env::var("OPENPROJECT_HTTP_SCHEMA").unwrap_or(OPENPROJECT_HTTP_SCHEMA.to_string());
-
-    // Base URL for OpenProject API
-    let op_base_url = format!("{}://{}/api/v3/", op_http_schema, op_host);
-    info!("OpenProject base URL: {}", op_base_url);
-
-    let client = reqwest::Client::new();
-
-    client
-        .get(op_base_url + uri)
-        .basic_auth("apikey", Some(OPENPROJECT_API_KEY))
-        .send()
-        .await
-}
-
 #[cfg(test)]
 mod test {
     use test_log::test;
 
-    use crate::openproject::{self, Comment, Link, Links, TimeEntryRequest};
+    use crate::openproject::{self, Comment, Link, Links, OpenProjectClient, TimeEntryRequest};
 
     #[test(tokio::test)]
     async fn test_serde() {
-        openproject::get_existing_toggl_ids("458").await.unwrap();
+        let op_client = OpenProjectClient::new();
+        openproject::get_existing_toggl_ids(&op_client, "458")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn test_upload() {
+        let op_client = OpenProjectClient::new();
+
         let entry = TimeEntryRequest {
             links: Links {
                 work_package: Link {
@@ -203,6 +230,6 @@ mod test {
             spent_on: chrono::Utc::now().format("%Y-%m-%d").to_string(),
         };
 
-        entry.upload().await.unwrap();
+        entry.upload(&op_client).await.unwrap();
     }
 }
