@@ -16,8 +16,13 @@ mod openproject;
 mod toggl;
 mod token;
 
-// Regular expression for OpenProject work package IDs (e.g., [OP#123])
-const REGEX_STRING: &str = r"(?i)^\[OP#(\d+)\](?: +(.*))*";
+// Regular expression for OpenProject work package IDs from the Toggle Extension
+// Extract "123" from "[OP#123] My Task"
+#[allow(unused)]
+const REGEX_STRING_TOGGLEXT: &str = r"(?i)^\[OP#(\d+)\](?: +(.*))*";
+// ... or also match manually entered tasks
+// Extract "123" from "#123 My Task" or "123 My Task" or "[OP#123] My Task"
+const REGEX_STRING_ALL: &str = r"(?i)^\[?(?:OP)?#?(\d+)\]?(?: +(.*))*";
 
 const COMMENT_SEPARATOR: &str = " - ";
 
@@ -34,7 +39,7 @@ async fn main() -> Result<()> {
     info!("Time entries: {:#?}", time_entries);
 
     // Create a regex to extract the Work Package ID from the time entry
-    let re = Regex::new(REGEX_STRING).unwrap();
+    let re = Regex::new(REGEX_STRING_ALL).unwrap();
 
     // Filter out entries with no stop time (= still running) and duration less than 1 minute
     let time_entries = time_entries
@@ -149,14 +154,22 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use crate::REGEX_STRING;
+    use crate::REGEX_STRING_ALL;
     use regex::Regex;
 
     #[test]
     fn test_regex() {
-        let re = Regex::new(REGEX_STRING).unwrap();
+        let re = Regex::new(REGEX_STRING_ALL).unwrap();
         let caps = re.captures("[OP#123] My Description").unwrap();
 
+        assert_eq!(caps.get(1).unwrap().as_str(), "123");
+        assert_eq!(caps.get(2).unwrap().as_str(), "My Description");
+
+        let caps = re.captures("#123 My Description").unwrap();
+        assert_eq!(caps.get(1).unwrap().as_str(), "123");
+        assert_eq!(caps.get(2).unwrap().as_str(), "My Description");
+        
+        let caps = re.captures("123 My Description").unwrap();
         assert_eq!(caps.get(1).unwrap().as_str(), "123");
         assert_eq!(caps.get(2).unwrap().as_str(), "My Description");
     }
