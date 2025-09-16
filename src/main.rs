@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use dialoguer::{Confirm, theme::ColorfulTheme};
 use openproject::{OpenProjectClient, TimeEntryRequest};
 use regex::Regex;
@@ -26,8 +27,18 @@ const REGEX_STRING_ALL: &str = r"(?i)^\[?(?:OP)?#?(\d+)\]?(?: +(.*))*";
 
 const COMMENT_SEPARATOR: &str = " - ";
 
+#[derive(Parser)]
+#[command(name = "openproject-toggl-import")]
+#[command(about = "Import Toggl time entries to OpenProject")]
+struct Cli {
+    /// Number of days to fetch Toggl entries between 1-89
+    #[arg(short, long, default_value = "14", value_parser = clap::value_parser!(u8).range(1..=89))]
+    days: u8,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
 
@@ -35,7 +46,7 @@ async fn main() -> Result<()> {
         .unwrap_or(OPENPROJECT_DEFAULT_ACTIVITY_ID.to_string());
 
     // Get all toggl time entries
-    let time_entries: Vec<toggl::TimeEntry> = toggl::get_time_entries(89).await?;
+    let time_entries: Vec<toggl::TimeEntry> = toggl::get_time_entries(cli.days.into()).await?;
     info!("Time entries: {:#?}", time_entries);
 
     // Create a regex to extract the Work Package ID from the time entry
