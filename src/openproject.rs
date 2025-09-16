@@ -52,11 +52,6 @@ struct Comment {
     raw: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct User {
-    pub id: String,
-}
-
 impl OpenProjectClient {
     pub fn new() -> Self {
         // Get environment variables
