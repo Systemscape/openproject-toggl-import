@@ -191,10 +191,10 @@ pub async fn get_existing_toggl_ids(
         for element in elements_array {
             if let Some(comment_field) = element.get("comment").and_then(|c| c.get("raw")) {
                 // Extract the toggl ID as the first part before the comment separator
-                if let Some(comment_str) = comment_field.as_str() {
-                    if let Some((toggl_id, _)) = comment_str.split_once(COMMENT_SEPARATOR) {
-                        existing_toggl_ids.push(toggl_id.to_string());
-                    }
+                if let Some(comment_str) = comment_field.as_str()
+                    && let Some((toggl_id, _)) = comment_str.split_once(COMMENT_SEPARATOR)
+                {
+                    existing_toggl_ids.push(toggl_id.to_string());
                 }
             }
         }
