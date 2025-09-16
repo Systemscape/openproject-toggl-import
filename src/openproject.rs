@@ -165,7 +165,7 @@ pub async fn get_existing_toggl_ids(
 
     // Construct a query that gets time entries filtered for the given workpackage ID
     let uri = format!(
-        "time_entries?pageSize=100&filters=[{{\"work_package\":{{\"operator\":\"=\",\"values\":[\"{wp_id}\"]}}}}]"
+        "time_entries?pageSize=100&filters=[{{\"entity_type\":{{\"operator\":\"=\",\"values\":[\"WorkPackage\"]}},\"entity_id\":{{\"operator\":\"=\",\"values\":[\"{wp_id}\"]}}}}]"
     );
 
     let res = op_client.get(&uri).await?;
@@ -191,15 +191,11 @@ pub async fn get_existing_toggl_ids(
         for element in elements_array {
             if let Some(comment_field) = element.get("comment").and_then(|c| c.get("raw")) {
                 // Extract the toggl ID as the first part before the comment separator
-                existing_toggl_ids.push(
-                    comment_field
-                        .as_str()
-                        .unwrap()
-                        .split_once(COMMENT_SEPARATOR)
-                        .unwrap()
-                        .0
-                        .to_string(),
-                );
+                if let Some(comment_str) = comment_field.as_str() {
+                    if let Some((toggl_id, _)) = comment_str.split_once(COMMENT_SEPARATOR) {
+                        existing_toggl_ids.push(toggl_id.to_string());
+                    }
+                }
             }
         }
     }

@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         .unwrap_or(OPENPROJECT_DEFAULT_ACTIVITY_ID.to_string());
 
     // Get all toggl time entries
-    let time_entries: Vec<toggl::TimeEntry> = toggl::get_time_entries(2).await?;
+    let time_entries: Vec<toggl::TimeEntry> = toggl::get_time_entries(89).await?;
     info!("Time entries: {:#?}", time_entries);
 
     // Create a regex to extract the Work Package ID from the time entry
@@ -168,7 +168,7 @@ mod test {
         let caps = re.captures("#123 My Description").unwrap();
         assert_eq!(caps.get(1).unwrap().as_str(), "123");
         assert_eq!(caps.get(2).unwrap().as_str(), "My Description");
-        
+
         let caps = re.captures("123 My Description").unwrap();
         assert_eq!(caps.get(1).unwrap().as_str(), "123");
         assert_eq!(caps.get(2).unwrap().as_str(), "My Description");
