@@ -1,10 +1,19 @@
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Client, Method};
+use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
+use tracing::info;
 
 use crate::token::AUTH_TOKEN_TOGGL;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Reqwest error")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("Rate Limit Exceeded")]
+    RatelimitExceeded,
+}
 
 /// **Note** it seems like it is not straightforward to determine whether an entry has been deleted
 /// so there might appear entries that are not shown on toggl anymore
@@ -28,9 +37,10 @@ pub struct ExtendedTimeEntry {
 }
 
 /// Pull all time entries from toggl within the last `days`
-/// 
+///
 /// **Note** `days` must be less than 90
-pub async fn get_time_entries(days: i64) -> Result<Vec<TimeEntry>, reqwest::Error> {
+pub async fn get_time_entries(days: i64) -> Result<Vec<TimeEntry>, Error> {
+    info!("Getting time entries from toggl");
     let authorization_value = format!(
         "Basic {}",
         general_purpose::STANDARD.encode(format!("{}:api_token", AUTH_TOKEN_TOGGL))
@@ -51,10 +61,15 @@ pub async fn get_time_entries(days: i64) -> Result<Vec<TimeEntry>, reqwest::Erro
         .header(CONTENT_TYPE, "application/json")
         .header(AUTHORIZATION, authorization_value)
         .send()
-        .await?;
+        .await
+        .map_err(Error::Reqwest)?;
+
+    if response.status() == StatusCode::PAYMENT_REQUIRED {
+        return Err(Error::RatelimitExceeded);
+    }
 
     // Handle the JSON response as an array
-    let time_entries: Vec<TimeEntry> = response.json().await?;
+    let time_entries: Vec<TimeEntry> = response.json().await.map_err(Error::Reqwest)?;
 
     Ok(time_entries)
 }
